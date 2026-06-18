@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pengacakan Harian</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Jost:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="ambient-glow glow-1"></div>
+<div class="ambient-glow glow-2"></div>
+
+<div class="page">
+
+  <header class="page-header">
+    <p class="eyebrow">Pengaturan Kelas</p>
+    <h1>Pengacakan Harian</h1>
+    <p class="subtitle">Pemimpin &middot; Tempat Duduk &middot; Piket</p>
+  </header>
+
+  <div class="auth-bar">
+    <div class="auth-status">
+      <span id="authBadge" class="auth-badge">Tamu</span>
+      <span id="authHint">Hanya bisa melihat</span>
+    </div>
+    <div class="auth-actions">
+      <button id="loginBtn" class="btn-ghost" type="button">Login Admin</button>
+      <!-- Manage Roda: khusus panel Pemimpin -->
+      <button id="manageWheelBtn" class="btn-ghost" type="button" style="display:none">Kelola Roda</button>
+      <!-- Manage People: untuk Piket & Tempat Duduk -->
+      <button id="manageBtn" class="btn-ghost" type="button" style="display:none">Kelola Orang</button>
+      <button id="logoutBtn" class="btn-ghost" type="button" style="display:none">Logout</button>
+    </div>
+  </div>
+
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="pemimpin" type="button">Pemimpin</button>
+    <button class="tab-btn" data-tab="duduk" type="button">Tempat Duduk</button>
+    <button class="tab-btn" data-tab="piket" type="button">Piket</button>
+  </nav>
+
+  <!-- ===================== PANEL 1: PEMIMPIN (SPIN WHEEL) ===================== -->
+  <section class="panel active" data-panel="pemimpin">
+    <div class="panel-head">
+      <div>
+        <h2>Roda Pemimpin</h2>
+        <p class="panel-sub">Sekali terpilih, otomatis keluar dari roda sampai di-reset</p>
+      </div>
+    </div>
+
+    <div class="wheel-wrap">
+      <div class="wheel-pointer"></div>
+      <div id="wheelInner" class="wheel-inner">
+        <canvas id="wheelCanvas" width="280" height="280"></canvas>
+      </div>
+    </div>
+
+    <div class="wheel-actions">
+      <button id="spinBtn" class="shuffle-btn" type="button" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36"></path>
+          <polyline points="21 3 21 9 15 9"></polyline>
+        </svg>
+        <span>Putar Roda</span>
+      </button>
+      <button id="resetWheelBtn" class="btn-ghost" type="button" disabled>Reset Roda</button>
+    </div>
+    <p id="wheelStatus" class="status-text" style="text-align:center; margin-top:.6rem;"></p>
+
+    <div id="wheelResult" class="wheel-result"></div>
+
+    <div class="wheel-meta">
+      <p id="wheelMetaCount" class="status-text"></p>
+      <p id="wheelPickedList" class="status-text" style="font-style:italic;"></p>
+    </div>
+
+    <div id="poolManage" class="pool-manage"></div>
+  </section>
+
+  <!-- ===================== PANEL 2: TEMPAT DUDUK ===================== -->
+  <section class="panel" data-panel="duduk">
+    <div class="panel-head">
+      <div>
+        <h2>Susunan Tempat Duduk</h2>
+        <p class="panel-sub">8 Meja &middot; 16 Kursi</p>
+      </div>
+      <div class="panel-controls">
+        <button id="seatShuffleBtn" class="shuffle-btn" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"></polyline>
+            <line x1="4" y1="20" x2="21" y2="3"></line>
+            <polyline points="21 16 21 21 16 21"></polyline>
+            <line x1="15" y1="15" x2="21" y2="21"></line>
+            <line x1="4" y1="4" x2="9" y2="9"></line>
+          </svg>
+          <span>Acak Tempat Duduk</span>
+        </button>
+        <p id="seatCounter" class="status-text"></p>
+      </div>
+    </div>
+
+    <p class="front-marker">Depan Ruangan</p>
+
+    <main class="floor-plan">
+      <section class="side side-left">
+        <p class="side-label">Sisi Kiri</p>
+        <div class="table-unit" style="--d:0"><div class="seat fade-target" data-seat></div><div class="table-top"><span>1</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:1"><div class="seat fade-target" data-seat></div><div class="table-top"><span>2</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:2"><div class="seat fade-target" data-seat></div><div class="table-top"><span>3</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:3"><div class="seat fade-target" data-seat></div><div class="table-top"><span>4</span></div><div class="seat fade-target" data-seat></div></div>
+      </section>
+      <div class="aisle" aria-hidden="true"></div>
+      <section class="side side-right">
+        <p class="side-label">Sisi Kanan</p>
+        <div class="table-unit" style="--d:4"><div class="seat fade-target" data-seat></div><div class="table-top"><span>5</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:5"><div class="seat fade-target" data-seat></div><div class="table-top"><span>6</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:6"><div class="seat fade-target" data-seat></div><div class="table-top"><span>7</span></div><div class="seat fade-target" data-seat></div></div>
+        <div class="table-unit" style="--d:7"><div class="seat fade-target" data-seat></div><div class="table-top"><span>8</span></div><div class="seat fade-target" data-seat></div></div>
+      </section>
+    </main>
+
+    <footer class="legend">
+      <span class="legend-item"><span class="dot dot-filled"></span>Terisi</span>
+      <span class="legend-item"><span class="dot dot-empty"></span>Kosong</span>
+    </footer>
+  </section>
+
+  <!-- ===================== PANEL 3: PIKET ===================== -->
+  <section class="panel" data-panel="piket">
+    <div class="panel-head">
+      <div>
+        <h2>Jadwal Piket</h2>
+        <p class="panel-sub">Senin &ndash; Jumat &middot; dibagi rata otomatis</p>
+      </div>
+      <div class="panel-controls">
+        <button id="dutyShuffleBtn" class="shuffle-btn" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"></polyline>
+            <line x1="4" y1="20" x2="21" y2="3"></line>
+            <polyline points="21 16 21 21 16 21"></polyline>
+            <line x1="15" y1="15" x2="21" y2="21"></line>
+            <line x1="4" y1="4" x2="9" y2="9"></line>
+          </svg>
+          <span>Acak Piket</span>
+        </button>
+        <p id="dutyStatus" class="status-text"></p>
+      </div>
+    </div>
+
+    <div class="day-grid">
+      <div class="day-card" style="--d:0"><p class="day-title">Senin</p><div class="day-body fade-target" data-duty="Senin"></div></div>
+      <div class="day-card" style="--d:1"><p class="day-title">Selasa</p><div class="day-body fade-target" data-duty="Selasa"></div></div>
+      <div class="day-card" style="--d:2"><p class="day-title">Rabu</p><div class="day-body fade-target" data-duty="Rabu"></div></div>
+      <div class="day-card" style="--d:3"><p class="day-title">Kamis</p><div class="day-body fade-target" data-duty="Kamis"></div></div>
+      <div class="day-card" style="--d:4"><p class="day-title">Jumat</p><div class="day-body fade-target" data-duty="Jumat"></div></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- CELEBRATION MODAL -->
+<canvas id="confettiCanvas"></canvas>
+<div id="celebModal">
+  <div class="celeb-box">
+    <div class="celeb-crown">👑</div>
+    <div id="celebAvatar" class="celeb-avatar">?</div>
+    <p class="celeb-label">Pemimpin Hari Ini</p>
+    <p id="celebName" class="celeb-name">—</p>
+    <p id="celebMsg" class="celeb-msg"></p>
+    <button class="celeb-close" id="celebCloseBtn" type="button">Siap!</button>
+  </div>
+</div>
+
+<!-- LOGIN MODAL -->
+<div id="loginModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-box-header">
+      <h3>Login Admin</h3>
+      <button id="loginCloseX" class="modal-close-btn" type="button" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="modal-box-body">
+      <p class="modal-sub">Masuk untuk mengacak &amp; mengelola daftar orang</p>
+      <div class="modal-field">
+        <label for="loginUser">Username</label>
+        <input id="loginUser" type="text" autocomplete="username">
+      </div>
+      <div class="modal-field">
+        <label for="loginPass">Password</label>
+        <input id="loginPass" type="password" autocomplete="current-password">
+      </div>
+      <p id="loginError" class="modal-error"></p>
+      <div class="modal-actions">
+        <button id="loginCancelBtn" class="btn-ghost" type="button">Batal</button>
+        <button id="loginSubmitBtn" class="btn-primary" type="button">Masuk</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MANAGE WHEEL MODAL (khusus roda pemimpin) -->
+<div id="manageWheelModal" class="modal-overlay">
+  <div class="modal-box" style="width:min(420px,100%);">
+    <div class="modal-box-header">
+      <h3>Kelola Roda</h3>
+      <button id="manageWheelCloseX" class="modal-close-btn" type="button" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="modal-box-body">
+      <p class="modal-sub">Daftar khusus roda pemimpin &mdash; terpisah dari Piket &amp; Tempat Duduk</p>
+      <div id="wheelPeopleList" class="people-list"></div>
+      <div class="add-row">
+        <input id="newWheelNameInput" type="text" placeholder="Nama baru...">
+        <button id="addWheelNameBtn" class="btn-primary" type="button">Tambah</button>
+      </div>
+
+      <div class="bulk-divider"><span>atau isi sekaligus</span></div>
+      <div class="modal-field">
+        <label for="bulkWheelNamesInput">Satu nama per baris (pisahkan dengan Enter)</label>
+        <textarea id="bulkWheelNamesInput" rows="6" placeholder="Frisco&#10;Farhan&#10;Fahri&#10;..."></textarea>
+        <p class="bulk-hint">Menerapkan ini akan mengganti seluruh daftar roda &amp; mereset roda.</p>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start;">
+        <button id="applyBulkWheelBtn" class="btn-primary" type="button">Terapkan Daftar</button>
+      </div>
+
+      <div class="modal-actions">
+        <button id="manageWheelCloseBtn" class="btn-ghost" type="button">Selesai</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MANAGE PEOPLE MODAL (untuk Piket & Tempat Duduk) -->
+<div id="manageModal" class="modal-overlay">
+  <div class="modal-box" style="width:min(420px,100%);">
+    <div class="modal-box-header">
+      <h3>Kelola Orang</h3>
+      <button id="manageCloseX" class="modal-close-btn" type="button" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="modal-box-body">
+      <p class="modal-sub">Daftar untuk Piket &amp; Tempat Duduk &mdash; tidak mempengaruhi roda</p>
+      <div id="peopleList" class="people-list"></div>
+      <div class="add-row">
+        <input id="newNameInput" type="text" placeholder="Nama baru...">
+        <button id="addNameBtn" class="btn-primary" type="button">Tambah</button>
+      </div>
+
+      <div class="bulk-divider"><span>atau isi sekaligus</span></div>
+      <div class="modal-field">
+        <label for="bulkNamesInput">Satu nama per baris (pisahkan dengan Enter)</label>
+        <textarea id="bulkNamesInput" rows="6" placeholder="Frisco&#10;Farhan&#10;Fahri&#10;..."></textarea>
+        <p class="bulk-hint">Menerapkan ini akan mengganti seluruh daftar &amp; mereset tempat duduk &amp; piket.</p>
+      </div>
+      <div class="modal-actions" style="justify-content:flex-start;">
+        <button id="applyBulkBtn" class="btn-primary" type="button">Terapkan Daftar</button>
+      </div>
+
+      <div class="modal-actions">
+        <button id="manageCloseBtn" class="btn-ghost" type="button">Selesai</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+
+</body>
+</html>
