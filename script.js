@@ -15,7 +15,7 @@
   var DAYS = ["Senin","Selasa","Rabu","Kamis","Jumat"];
   var GOLD = "#c9a25c";
   var ADMIN_USER = "admin";
-  var ADMIN_PASS = "admin123";
+  var ADMIN_PASS = "WheniAdmin123#";
 
   /* WHEEL_NAMES: daftar khusus roda pemimpin */
   var WHEEL_NAMES = loadData("app_wheel_names", DEFAULT_NAMES.slice());
