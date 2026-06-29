@@ -21,7 +21,6 @@
   var WHEEL_NAMES = loadData("app_wheel_names", DEFAULT_NAMES.slice());
   var WHEEL_POOL  = loadData("app_wheelPool", WHEEL_NAMES.slice());
   var lastWinner  = loadData("app_lastWinner", null);
-  /* pastikan pool hanya berisi nama yg ada di WHEEL_NAMES */
   WHEEL_POOL = WHEEL_POOL.filter(function(n){ return WHEEL_NAMES.indexOf(n) !== -1; });
 
   /* NAMES: daftar untuk Piket & Tempat Duduk */
@@ -30,6 +29,172 @@
   var isAdmin = false;
   var wheelRotation = 0;
   var spinning = false;
+
+  /* ================================================================
+     SEATING v2 — Anti-repeat seat & fair empty-slot rotation
+     ================================================================ */
+
+  /* Pasangan bangku (teman sebangku) per meja, index seat 0–15
+     Tiap meja: [seat kiri, seat kanan]
+     Urutan seat mengikuti urutan .seat DOM element:
+       Meja 1: 0,1 | Meja 2: 2,3 | Meja 3: 4,5 | Meja 4: 6,7
+       Meja 5: 8,9 | Meja 6: 10,11 | Meja 7: 12,13 | Meja 8: 14,15  */
+  var SEAT_PAIRS = [[0,1],[2,3],[4,5],[6,7],[8,9],[10,11],[12,13],[14,15]];
+  var TOTAL_SEATS = 16;
+
+  /* History anti-repeat (persistent) */
+  var seatHistory    = loadData("app_seatHistory", {});
+  var partnerHistory = loadData("app_partnerHistory", {});
+  var emptyHistory   = loadData("app_emptyHistory", []);
+
+  function pairKey(a, b) {
+    return a < b ? a + "|" + b : b + "|" + a;
+  }
+
+  /* Hitung penalti sebuah nama untuk duduk di seatIdx.
+     Semakin baru di history → penalti makin besar (eksponensial). */
+  function seatPenalty(name, seatIdx) {
+    var hist = seatHistory[name] || [];
+    var penalty = 0;
+    for (var i = 0; i < hist.length; i++) {
+      if (hist[i] === seatIdx) {
+        /* hist[0] = paling lama, hist[length-1] = paling baru */
+        /* weight: posisi ke-i dari akhir */
+        var recency = hist.length - i; /* 1..N, makin besar = makin baru */
+        penalty += recency * recency * 4;
+      }
+    }
+    return penalty;
+  }
+
+  /* Tentukan posisi kursi kosong yang paling adil (paling jarang kosong). */
+  function pickEmptySeatIndex(allIndices) {
+    var freq = {};
+    allIndices.forEach(function(i) { freq[i] = 0; });
+    emptyHistory.forEach(function(idx) { if (freq[idx] !== undefined) freq[idx]++; });
+
+    var minFreq = Infinity;
+    allIndices.forEach(function(idx) { if (freq[idx] < minFreq) minFreq = freq[idx]; });
+
+    var candidates = allIndices.filter(function(idx) { return freq[idx] === minFreq; });
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
+  /* Assign nama ke slot dengan anti-repeat scoring (greedy + noise). */
+  function assignSeatsAntiRepeat(names, availableSlots) {
+    var slots = availableSlots.slice();
+    var assignment = {}; /* seatIdx -> name */
+
+    /* Prioritaskan nama yang history-nya paling banyak (lebih sulit ditempatkan) */
+    var ordered = names.slice().sort(function(a, b) {
+      return (seatHistory[b] || []).length - (seatHistory[a] || []).length;
+    });
+
+    ordered.forEach(function(name) {
+      if (slots.length === 0) return;
+
+      var scored = slots.map(function(seatIdx) {
+        var sc = seatPenalty(name, seatIdx);
+
+        /* Penalti teman sebangku: cek apakah pair-slot sudah terisi */
+        SEAT_PAIRS.forEach(function(pair) {
+          var otherIdx = -1;
+          if (pair[0] === seatIdx) otherIdx = pair[1];
+          if (pair[1] === seatIdx) otherIdx = pair[0];
+          if (otherIdx !== -1 && assignment[otherIdx] !== undefined) {
+            var partner = assignment[otherIdx];
+            var pk = pairKey(name, partner);
+            sc += (partnerHistory[pk] || 0) * 8;
+          }
+        });
+
+        /* Tambah noise kecil supaya tidak terlalu deterministik */
+        sc += Math.random() * 1.5;
+
+        return { idx: seatIdx, score: sc };
+      });
+
+      scored.sort(function(a, b) { return a.score - b.score; });
+      var chosen = scored[0].idx;
+      assignment[chosen] = name;
+      slots.splice(slots.indexOf(chosen), 1);
+    });
+
+    return assignment;
+  }
+
+  function generateSeating() {
+    var allIndices = [];
+    for (var i = 0; i < TOTAL_SEATS; i++) allIndices.push(i);
+
+    var result = new Array(TOTAL_SEATS).fill(null);
+
+    if (NAMES.length === 0) {
+      updateSeatingHistory(result, null);
+      return result;
+    }
+
+    var names = NAMES.slice();
+
+    if (names.length >= TOTAL_SEATS) {
+      /* Isi semua kursi, tidak ada yang kosong */
+      var shuffled = shuffleArray(names.slice(0, TOTAL_SEATS));
+      shuffled.forEach(function(name, i) { result[i] = name; });
+      updateSeatingHistory(result, null);
+      return result;
+    }
+
+    /* Tentukan kursi kosong secara adil */
+    var emptySeatIdx = pickEmptySeatIndex(allIndices);
+    var availableSlots = allIndices.filter(function(i) { return i !== emptySeatIdx; });
+
+    /* Assign nama ke slot yang tersedia */
+    var assignment = assignSeatsAntiRepeat(names, availableSlots);
+    allIndices.forEach(function(i) {
+      result[i] = (assignment[i] !== undefined) ? assignment[i] : null;
+    });
+
+    updateSeatingHistory(result, emptySeatIdx);
+    return result;
+  }
+
+  function updateSeatingHistory(seats, emptySeatIdx) {
+    var MAX_HIST = 10;
+
+    seats.forEach(function(name, seatIdx) {
+      if (!name) return;
+      if (!seatHistory[name]) seatHistory[name] = [];
+      seatHistory[name].push(seatIdx);
+      if (seatHistory[name].length > MAX_HIST) seatHistory[name].shift();
+    });
+
+    SEAT_PAIRS.forEach(function(pair) {
+      var a = seats[pair[0]];
+      var b = seats[pair[1]];
+      if (a && b) {
+        var pk = pairKey(a, b);
+        partnerHistory[pk] = (partnerHistory[pk] || 0) + 1;
+      }
+    });
+
+    if (emptySeatIdx !== null) {
+      emptyHistory.push(emptySeatIdx);
+      if (emptyHistory.length > 32) emptyHistory.shift();
+    }
+
+    saveData("app_seatHistory",    seatHistory);
+    saveData("app_partnerHistory", partnerHistory);
+    saveData("app_emptyHistory",   emptyHistory);
+  }
+
+  function resetSeatingHistory() {
+    seatHistory    = {};
+    partnerHistory = {};
+    emptyHistory   = [];
+    saveData("app_seatHistory",    seatHistory);
+    saveData("app_partnerHistory", partnerHistory);
+    saveData("app_emptyHistory",   emptyHistory);
+  }
 
   /* ---------------- UTILS ---------------- */
   function shuffleArray(arr){
@@ -124,19 +289,16 @@
   document.getElementById("logoutBtn").addEventListener("click",function(){ isAdmin=false; updateAuthUI(); });
 
   /* ======================================================
-     MANAGE WHEEL (roda pemimpin) — TERPISAH dari NAMES
+     MANAGE WHEEL
      ====================================================== */
   document.getElementById("manageWheelBtn").addEventListener("click",function(){
-    renderWheelPeopleList();
-    fillBulkWheelTextarea();
-    openModal("manageWheelModal");
+    renderWheelPeopleList(); fillBulkWheelTextarea(); openModal("manageWheelModal");
   });
   document.getElementById("manageWheelCloseBtn").addEventListener("click",function(){ closeModal("manageWheelModal"); });
 
   function fillBulkWheelTextarea(){
     document.getElementById("bulkWheelNamesInput").value=WHEEL_NAMES.join("\n");
   }
-
   function renderWheelPeopleList(){
     var list=document.getElementById("wheelPeopleList");
     if(WHEEL_NAMES.length===0){
@@ -148,9 +310,7 @@
     list.querySelectorAll("[data-wheel-remove]").forEach(function(btn){
       btn.addEventListener("click",function(){
         var idx=parseInt(btn.getAttribute("data-wheel-remove"),10);
-        removeWheelPersonAt(idx);
-        renderWheelPeopleList();
-        afterWheelRosterChange();
+        removeWheelPersonAt(idx); renderWheelPeopleList(); afterWheelRosterChange();
       });
     });
   }
@@ -160,63 +320,45 @@
     var wIdx=WHEEL_POOL.indexOf(removedName);
     if(wIdx!==-1){ WHEEL_POOL.splice(wIdx,1); }
     if(lastWinner===removedName){ lastWinner=null; saveData("app_lastWinner",null); }
-    saveData("app_wheel_names",WHEEL_NAMES);
-    saveData("app_wheelPool",WHEEL_POOL);
+    saveData("app_wheel_names",WHEEL_NAMES); saveData("app_wheelPool",WHEEL_POOL);
   }
-
   document.getElementById("addWheelNameBtn").addEventListener("click",function(){
     var input=document.getElementById("newWheelNameInput");
     var name=input.value.trim();
     if(!name||WHEEL_NAMES.indexOf(name)!==-1){ input.value=""; return; }
-    WHEEL_NAMES.push(name);
-    WHEEL_POOL.push(name);
-    saveData("app_wheel_names",WHEEL_NAMES);
-    saveData("app_wheelPool",WHEEL_POOL);
-    input.value="";
-    renderWheelPeopleList();
-    afterWheelRosterChange();
+    WHEEL_NAMES.push(name); WHEEL_POOL.push(name);
+    saveData("app_wheel_names",WHEEL_NAMES); saveData("app_wheelPool",WHEEL_POOL);
+    input.value=""; renderWheelPeopleList(); afterWheelRosterChange();
   });
   document.getElementById("newWheelNameInput").addEventListener("keydown",function(e){
     if(e.key==="Enter"){ document.getElementById("addWheelNameBtn").click(); }
   });
-
   document.getElementById("applyBulkWheelBtn").addEventListener("click",function(){
     var raw=document.getElementById("bulkWheelNamesInput").value;
     var lines=raw.split("\n").map(function(s){ return s.trim(); }).filter(function(s){ return s.length>0; });
     var seen={};var unique=[];
     lines.forEach(function(n){ if(!seen[n]){ seen[n]=true; unique.push(n); } });
     if(unique.length===0)return;
-    WHEEL_NAMES=unique;
-    WHEEL_POOL=WHEEL_NAMES.slice();
-    lastWinner=null;
-    saveData("app_wheel_names",WHEEL_NAMES);
-    saveData("app_wheelPool",WHEEL_POOL);
-    saveData("app_lastWinner",null);
-    renderWheelPeopleList();
-    fillBulkWheelTextarea();
-    afterWheelRosterChange();
+    WHEEL_NAMES=unique; WHEEL_POOL=WHEEL_NAMES.slice(); lastWinner=null;
+    saveData("app_wheel_names",WHEEL_NAMES); saveData("app_wheelPool",WHEEL_POOL); saveData("app_lastWinner",null);
+    renderWheelPeopleList(); fillBulkWheelTextarea(); afterWheelRosterChange();
   });
-
   function afterWheelRosterChange(){
     wheelRotation=0;
     var wheelEl=document.getElementById("wheelInner");
-    wheelEl.style.transition="none";
-    wheelEl.style.transform="rotate(0deg)";
+    wheelEl.style.transition="none"; wheelEl.style.transform="rotate(0deg)";
     drawWheel();
     if(lastWinner){ showWheelResult(lastWinner); } else { clearWheelResult(); }
-    updateWheelMeta();
-    updateWheelStatusText();
-    updateAuthUI();
+    updateWheelMeta(); updateWheelStatusText(); updateAuthUI();
   }
 
   /* ======================================================
-     MANAGE PEOPLE (piket & tempat duduk) — TERPISAH dari WHEEL_NAMES
+     MANAGE PEOPLE (piket & tempat duduk)
      ====================================================== */
   document.getElementById("manageBtn").addEventListener("click",function(){ renderPeopleList(); fillBulkTextarea(); openModal("manageModal"); });
   document.getElementById("manageCloseBtn").addEventListener("click",function(){ closeModal("manageModal"); });
 
   function fillBulkTextarea(){ document.getElementById("bulkNamesInput").value=NAMES.join("\n"); }
-
   function renderPeopleList(){
     var list=document.getElementById("peopleList");
     if(NAMES.length===0){
@@ -228,25 +370,19 @@
     list.querySelectorAll("[data-remove-index]").forEach(function(btn){
       btn.addEventListener("click",function(){
         var idx=parseInt(btn.getAttribute("data-remove-index"),10);
-        removePersonAt(idx);
-        renderPeopleList();
-        afterRosterChange();
+        removePersonAt(idx); renderPeopleList(); afterRosterChange();
       });
     });
   }
   function removePersonAt(idx){
-    NAMES.splice(idx,1);
-    saveData("app_names",NAMES);
+    NAMES.splice(idx,1); saveData("app_names",NAMES);
   }
   document.getElementById("addNameBtn").addEventListener("click",function(){
     var input=document.getElementById("newNameInput");
     var name=input.value.trim();
     if(!name||NAMES.indexOf(name)!==-1){ input.value=""; return; }
-    NAMES.push(name);
-    saveData("app_names",NAMES);
-    input.value="";
-    renderPeopleList();
-    afterRosterChange();
+    NAMES.push(name); saveData("app_names",NAMES);
+    input.value=""; renderPeopleList(); afterRosterChange();
   });
   document.getElementById("newNameInput").addEventListener("keydown",function(e){
     if(e.key==="Enter"){ document.getElementById("addNameBtn").click(); }
@@ -257,15 +393,13 @@
     var seen={};var unique=[];
     lines.forEach(function(n){ if(!seen[n]){ seen[n]=true; unique.push(n); } });
     if(unique.length===0)return;
-    NAMES=unique;
-    saveData("app_names",NAMES);
-    renderPeopleList();
-    fillBulkTextarea();
-    afterRosterChange();
+    NAMES=unique; saveData("app_names",NAMES);
+    /* Reset history karena roster berubah total */
+    resetSeatingHistory();
+    renderPeopleList(); fillBulkTextarea(); afterRosterChange();
   });
 
   function afterRosterChange(){
-    /* hanya reset seat & duty, TIDAK menyentuh wheel */
     placeholderSeats(); placeholderDuty();
     saveData("app_seating",null); saveData("app_duty",null);
   }
@@ -275,7 +409,6 @@
   var confettiCtx = confettiCanvas.getContext("2d");
   var confettiParticles = [];
   var confettiRaf = null;
-
   var CELEB_MESSAGES = [
     "Selamat ya, kamu terpilih jadi pemimpin hari ini! 🎉",
     "Wah, beruntung banget! Pimpin kelas dengan semangat! 🚀",
@@ -285,138 +418,71 @@
     "Congrats! Kepemimpinan sejati dimulai dari sini! 🌟",
     "Hore! Kamu yang beruntung hari ini! Semangat ya! 🎊",
   ];
-
-  function resizeConfettiCanvas(){
-    confettiCanvas.width = window.innerWidth;
-    confettiCanvas.height = window.innerHeight;
-  }
-  resizeConfettiCanvas();
-  window.addEventListener("resize", resizeConfettiCanvas);
-
+  function resizeConfettiCanvas(){ confettiCanvas.width=window.innerWidth; confettiCanvas.height=window.innerHeight; }
+  resizeConfettiCanvas(); window.addEventListener("resize",resizeConfettiCanvas);
   function spawnConfetti(){
-    confettiParticles = [];
-    var colors = ["#c9a25c","#e0c389","#e76f51","#f4a261","#e9c46a","#ffffff","#ffd166","#ef476f","#06d6a0"];
-    for(var i = 0; i < 140; i++){
-      confettiParticles.push({
-        x: Math.random() * window.innerWidth,
-        y: Math.random() * window.innerHeight - window.innerHeight,
-        w: 6 + Math.random() * 8,
-        h: 10 + Math.random() * 8,
-        color: colors[Math.floor(Math.random() * colors.length)],
-        rot: Math.random() * Math.PI * 2,
-        rotSpeed: (Math.random() - 0.5) * 0.18,
-        vx: (Math.random() - 0.5) * 3,
-        vy: 2.5 + Math.random() * 3.5,
-        opacity: 1,
-      });
+    confettiParticles=[];
+    var colors=["#c9a25c","#e0c389","#e76f51","#f4a261","#e9c46a","#ffffff","#ffd166","#ef476f","#06d6a0"];
+    for(var i=0;i<140;i++){
+      confettiParticles.push({ x:Math.random()*window.innerWidth, y:Math.random()*window.innerHeight-window.innerHeight, w:6+Math.random()*8, h:10+Math.random()*8, color:colors[Math.floor(Math.random()*colors.length)], rot:Math.random()*Math.PI*2, rotSpeed:(Math.random()-0.5)*0.18, vx:(Math.random()-0.5)*3, vy:2.5+Math.random()*3.5, opacity:1 });
     }
   }
-
   function animateConfetti(){
-    confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
-    var alive = false;
+    confettiCtx.clearRect(0,0,confettiCanvas.width,confettiCanvas.height);
+    var alive=false;
     confettiParticles.forEach(function(p){
-      p.x += p.vx; p.y += p.vy; p.rot += p.rotSpeed;
-      if(p.y > window.innerHeight * 0.6){ p.opacity -= 0.025; }
-      if(p.opacity > 0){
-        alive = true;
-        confettiCtx.save();
-        confettiCtx.globalAlpha = Math.max(0, p.opacity);
-        confettiCtx.translate(p.x, p.y);
-        confettiCtx.rotate(p.rot);
-        confettiCtx.fillStyle = p.color;
-        confettiCtx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
-        confettiCtx.restore();
-      }
+      p.x+=p.vx; p.y+=p.vy; p.rot+=p.rotSpeed;
+      if(p.y>window.innerHeight*0.6){ p.opacity-=0.025; }
+      if(p.opacity>0){ alive=true; confettiCtx.save(); confettiCtx.globalAlpha=Math.max(0,p.opacity); confettiCtx.translate(p.x,p.y); confettiCtx.rotate(p.rot); confettiCtx.fillStyle=p.color; confettiCtx.fillRect(-p.w/2,-p.h/2,p.w,p.h); confettiCtx.restore(); }
     });
-    if(alive){ confettiRaf = requestAnimationFrame(animateConfetti); }
-    else{ confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height); }
+    if(alive){ confettiRaf=requestAnimationFrame(animateConfetti); }
+    else{ confettiCtx.clearRect(0,0,confettiCanvas.width,confettiCanvas.height); }
   }
-
-  function stopConfetti(){
-    if(confettiRaf){ cancelAnimationFrame(confettiRaf); confettiRaf = null; }
-    confettiCtx.clearRect(0, 0, confettiCanvas.width, confettiCanvas.height);
-    confettiParticles = [];
-  }
-
+  function stopConfetti(){ if(confettiRaf){ cancelAnimationFrame(confettiRaf); confettiRaf=null; } confettiCtx.clearRect(0,0,confettiCanvas.width,confettiCanvas.height); confettiParticles=[]; }
   function showCelebration(name){
-    var el = document.getElementById("celebModal");
-    var av = document.getElementById("celebAvatar");
-    var nm = document.getElementById("celebName");
-    var ms = document.getElementById("celebMsg");
-    av.textContent = name.charAt(0);
-    av.style.setProperty("--celeb-color", nameColor(name));
-    nm.textContent = name;
-    ms.textContent = CELEB_MESSAGES[Math.floor(Math.random() * CELEB_MESSAGES.length)];
-    el.classList.add("show");
-    stopConfetti();
-    spawnConfetti();
-    animateConfetti();
+    var el=document.getElementById("celebModal"); var av=document.getElementById("celebAvatar");
+    var nm=document.getElementById("celebName"); var ms=document.getElementById("celebMsg");
+    av.textContent=name.charAt(0); av.style.setProperty("--celeb-color",nameColor(name));
+    nm.textContent=name; ms.textContent=CELEB_MESSAGES[Math.floor(Math.random()*CELEB_MESSAGES.length)];
+    el.classList.add("show"); stopConfetti(); spawnConfetti(); animateConfetti();
   }
+  document.getElementById("celebCloseBtn").addEventListener("click",function(){ document.getElementById("celebModal").classList.remove("show"); stopConfetti(); });
+  document.getElementById("celebModal").addEventListener("click",function(e){ if(e.target===this){ this.classList.remove("show"); stopConfetti(); } });
 
-  document.getElementById("celebCloseBtn").addEventListener("click", function(){
-    document.getElementById("celebModal").classList.remove("show");
-    stopConfetti();
-  });
-  document.getElementById("celebModal").addEventListener("click", function(e){
-    if(e.target === this){ this.classList.remove("show"); stopConfetti(); }
-  });
-
-  /* ---------------- WHEEL (PEMIMPIN) — pakai WHEEL_NAMES & WHEEL_POOL ---------------- */
+  /* ---------------- WHEEL (PEMIMPIN) ---------------- */
   function drawWheel(){
-    var canvas=document.getElementById("wheelCanvas");
-    var ctx=canvas.getContext("2d");
-    var n=WHEEL_POOL.length;
-    var size=canvas.width;
-    var cx=size/2,cy=size/2,radius=size/2-4;
+    var canvas=document.getElementById("wheelCanvas"); var ctx=canvas.getContext("2d");
+    var n=WHEEL_POOL.length; var size=canvas.width; var cx=size/2,cy=size/2,radius=size/2-4;
     ctx.clearRect(0,0,size,size);
-
     if(n===0){
-      ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2);
-      ctx.fillStyle="#241a12"; ctx.fill();
-      ctx.fillStyle="rgba(232,221,200,.4)"; ctx.font="13px Jost, sans-serif";
-      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.beginPath(); ctx.arc(cx,cy,radius,0,Math.PI*2); ctx.fillStyle="#241a12"; ctx.fill();
+      ctx.fillStyle="rgba(232,221,200,.4)"; ctx.font="13px Jost, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
       ctx.fillText(WHEEL_NAMES.length===0?"Belum ada orang":"Semua sudah terpilih",cx,cy);
-      ctx.beginPath(); ctx.arc(cx,cy,16,0,Math.PI*2);
-      ctx.fillStyle="#1c130d"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=GOLD; ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx,cy,16,0,Math.PI*2); ctx.fillStyle="#1c130d"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=GOLD; ctx.stroke();
       return;
     }
-
     var sliceAngle=(Math.PI*2)/n;
     for(var i=0;i<n;i++){
-      var start=i*sliceAngle-Math.PI/2;
-      var end=start+sliceAngle;
+      var start=i*sliceAngle-Math.PI/2; var end=start+sliceAngle;
       ctx.beginPath(); ctx.moveTo(cx,cy); ctx.arc(cx,cy,radius,start,end); ctx.closePath();
       ctx.fillStyle=nameColor(WHEEL_POOL[i]); ctx.fill();
       ctx.strokeStyle="rgba(21,15,12,0.6)"; ctx.lineWidth=1.5; ctx.stroke();
-
-      ctx.save();
-      ctx.translate(cx,cy);
-      ctx.rotate(start+sliceAngle/2);
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(start+sliceAngle/2);
       ctx.textAlign="right"; ctx.textBaseline="middle"; ctx.fillStyle="#1a1410";
-      var fontSize=Math.max(9,Math.min(13,150/n));
-      ctx.font="600 "+fontSize+"px Jost, sans-serif";
-      var label=WHEEL_POOL[i];
-      var maxW=radius-16;
+      var fontSize=Math.max(9,Math.min(13,150/n)); ctx.font="600 "+fontSize+"px Jost, sans-serif";
+      var label=WHEEL_POOL[i]; var maxW=radius-16;
       while(ctx.measureText(label).width>maxW&&label.length>2){ label=label.slice(0,-1); }
       if(label!==WHEEL_POOL[i]){ label=label+"."; }
-      ctx.fillText(label,radius-8,0);
-      ctx.restore();
+      ctx.fillText(label,radius-8,0); ctx.restore();
     }
-
-    ctx.beginPath(); ctx.arc(cx,cy,16,0,Math.PI*2);
-    ctx.fillStyle="#1c130d"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=GOLD; ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx,cy,16,0,Math.PI*2); ctx.fillStyle="#1c130d"; ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle=GOLD; ctx.stroke();
   }
-
   function showWheelResult(name){
     var resultEl=document.getElementById("wheelResult");
     resultEl.innerHTML='<span class="avatar avatar-lg" style="--avatar-color:'+nameColor(name)+'">'+name.charAt(0)+'</span><span class="leader-name">'+name+'</span>';
     resultEl.classList.add("show");
   }
-  function clearWheelResult(){
-    var resultEl=document.getElementById("wheelResult");
-    resultEl.innerHTML=""; resultEl.classList.remove("show");
-  }
+  function clearWheelResult(){ var resultEl=document.getElementById("wheelResult"); resultEl.innerHTML=""; resultEl.classList.remove("show"); }
   function updateWheelStatusText(){
     var statusEl=document.getElementById("wheelStatus");
     if(WHEEL_NAMES.length===0){ statusEl.textContent="Tambahkan orang via Kelola Roda"; return; }
@@ -428,7 +494,6 @@
     var picked=WHEEL_NAMES.filter(function(n){ return WHEEL_POOL.indexOf(n)===-1; });
     document.getElementById("wheelPickedList").textContent=picked.length>0?("Sudah terpilih: "+picked.join(", ")):"";
   }
-
   function renderPoolManage(){
     var wrap=document.getElementById("poolManage");
     if(!isAdmin||WHEEL_POOL.length===0){ wrap.innerHTML=""; return; }
@@ -440,70 +505,45 @@
       btn.addEventListener("click",function(){
         if(spinning)return;
         var idx=parseInt(btn.getAttribute("data-pool-remove-index"),10);
-        WHEEL_POOL.splice(idx,1);
-        saveData("app_wheelPool",WHEEL_POOL);
-        drawWheel(); updateWheelMeta(); updateWheelStatusText();
-        renderPoolManage(); updateAuthUI();
+        WHEEL_POOL.splice(idx,1); saveData("app_wheelPool",WHEEL_POOL);
+        drawWheel(); updateWheelMeta(); updateWheelStatusText(); renderPoolManage(); updateAuthUI();
       });
     });
   }
-
   function spinWheel(){
     if(spinning||!isAdmin)return;
-    var n=WHEEL_POOL.length;
-    if(n===0)return;
+    var n=WHEEL_POOL.length; if(n===0)return;
     spinning=true;
-    document.getElementById("spinBtn").disabled=true;
-    document.getElementById("resetWheelBtn").disabled=true;
-
-    var sliceAngle=360/n;
-    var winnerIndex=Math.floor(Math.random()*n);
-    var winnerName=WHEEL_POOL[winnerIndex];
-    var centerAngle=(winnerIndex+0.5)*sliceAngle;
-    var targetMod=(360-centerAngle+360)%360;
-    var currentMod=wheelRotation%360;
-    var delta=(targetMod-currentMod+360)%360;
+    document.getElementById("spinBtn").disabled=true; document.getElementById("resetWheelBtn").disabled=true;
+    var sliceAngle=360/n; var winnerIndex=Math.floor(Math.random()*n); var winnerName=WHEEL_POOL[winnerIndex];
+    var centerAngle=(winnerIndex+0.5)*sliceAngle; var targetMod=(360-centerAngle+360)%360;
+    var currentMod=wheelRotation%360; var delta=(targetMod-currentMod+360)%360;
     var totalRotation=wheelRotation+delta+5*360;
-
     var wheelEl=document.getElementById("wheelInner");
     wheelEl.style.transition="transform 3.2s cubic-bezier(.17,.67,.32,1.0)";
     wheelEl.style.transform="rotate("+totalRotation+"deg)";
     wheelRotation=totalRotation;
-
-    clearWheelResult();
-    document.getElementById("wheelStatus").textContent="Memutar...";
-
+    clearWheelResult(); document.getElementById("wheelStatus").textContent="Memutar...";
     setTimeout(function(){
-      spinning=false;
-      WHEEL_POOL.splice(winnerIndex,1);
-      lastWinner=winnerName;
-      saveData("app_wheelPool",WHEEL_POOL);
-      saveData("app_lastWinner",lastWinner);
-      drawWheel(); updateWheelMeta();
-      showWheelResult(winnerName);
-      updateWheelStatusText(); updateAuthUI();
+      spinning=false; WHEEL_POOL.splice(winnerIndex,1); lastWinner=winnerName;
+      saveData("app_wheelPool",WHEEL_POOL); saveData("app_lastWinner",lastWinner);
+      drawWheel(); updateWheelMeta(); showWheelResult(winnerName); updateWheelStatusText(); updateAuthUI();
       showCelebration(winnerName);
     },3300);
   }
   document.getElementById("spinBtn").addEventListener("click",spinWheel);
-
   document.getElementById("resetWheelBtn").addEventListener("click",function(){
     if(!isAdmin)return;
-    WHEEL_POOL=WHEEL_NAMES.slice();
-    lastWinner=null;
-    saveData("app_wheelPool",WHEEL_POOL);
-    saveData("app_lastWinner",null);
+    WHEEL_POOL=WHEEL_NAMES.slice(); lastWinner=null;
+    saveData("app_wheelPool",WHEEL_POOL); saveData("app_lastWinner",null);
     wheelRotation=0;
-    var wheelEl=document.getElementById("wheelInner");
-    wheelEl.style.transition="none";
-    wheelEl.style.transform="rotate(0deg)";
+    var wheelEl=document.getElementById("wheelInner"); wheelEl.style.transition="none"; wheelEl.style.transform="rotate(0deg)";
     drawWheel(); clearWheelResult(); updateWheelMeta(); updateWheelStatusText(); updateAuthUI();
   });
 
   /* ---------------- PIKET (pakai NAMES) ---------------- */
   function generateDuty(){
-    var shuffled=shuffleArray(NAMES);
-    var result={};
+    var shuffled=shuffleArray(NAMES); var result={};
     DAYS.forEach(function(d){ result[d]=[]; });
     shuffled.forEach(function(name,i){ result[DAYS[i%DAYS.length]].push(name); });
     return result;
@@ -535,14 +575,7 @@
     },50);
   });
 
-  /* ---------------- TEMPAT DUDUK (pakai NAMES) ---------------- */
-  function generateSeating(){
-    var totalSeats=16;
-    var pool=shuffleArray(NAMES);
-    var seated=pool.slice(0,totalSeats);
-    while(seated.length<totalSeats){ seated.push(null); }
-    return shuffleArray(seated);
-  }
+  /* ---------------- TEMPAT DUDUK (pakai NAMES + anti-repeat) ---------------- */
   function renderSeats(seats){
     var seatEls=document.querySelectorAll(".seat");
     seatEls.forEach(function(el,i){
@@ -577,14 +610,10 @@
 
   /* ---------------- INIT ---------------- */
   initTabs();
-
   var savedSeating=loadData("app_seating",null);
   var savedDuty=loadData("app_duty",null);
   if(savedSeating){ renderSeats(savedSeating); } else { placeholderSeats(); }
   if(savedDuty){ renderDuty(savedDuty); } else { placeholderDuty(); }
-
   drawWheel();
   if(lastWinner&&WHEEL_NAMES.indexOf(lastWinner)!==-1){ showWheelResult(lastWinner); } else { lastWinner=null; clearWheelResult(); }
-  updateWheelMeta();
-  updateWheelStatusText();
-  updateAuthUI();
+  updateWheelMeta(); updateWheelStatusText(); updateAuthUI();
